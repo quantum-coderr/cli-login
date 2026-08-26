@@ -23,8 +23,7 @@ func TestGenerateSecretProducesValidSecretAndURL(t *testing.T) {
 		t.Errorf("expected otpauth URL to start with %q, got %q", wantPrefix, otpauthURL)
 	}
 
-	// Round-trip: a code generated from the returned secret via the
-	// underlying library should validate against that same secret.
+	// A code generated from the returned secret should validate.
 	code, err := otplib.GenerateCode(secret, time.Now())
 	if err != nil {
 		t.Fatalf("otplib.GenerateCode: %v", err)

@@ -1,10 +1,6 @@
-// External test package (session_test, not session): these tests need
-// internal/auth to set up test users, and auth now imports session (to
-// issue sessions from CompleteLogin — Phase 3). An in-package test file
-// importing auth here would be an import cycle; an external test package
-// is a separate compilation unit that can import both session and auth
-// with no cycle. See session_test.go for the one test that still needs
-// in-package access (unexported generateToken).
+// External test package (session_test, not session): auth imports
+// session, so an in-package test file here that also imports auth would
+// cycle. See session_test.go for the one test needing in-package access.
 package session_test
 
 import (
@@ -23,7 +19,7 @@ import (
 )
 
 // ---------------------------------------------------------------------
-// Integration tests — require a real Postgres reachable via DATABASE_URL.
+// Integration tests, require a real Postgres reachable via DATABASE_URL.
 // See internal/auth/auth_test.go for how to run these against the
 // docker-compose db. Skipped automatically if DATABASE_URL isn't set.
 // ---------------------------------------------------------------------
@@ -32,7 +28,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		t.Skip("DATABASE_URL not set; skipping integration test (requires a running Postgres — see docker-compose)")
+		t.Skip("DATABASE_URL not set; skipping integration test (requires a running Postgres, see docker-compose)")
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -41,10 +37,8 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err := db.Ping(); err != nil {
 		t.Fatalf("ping db: %v", err)
 	}
-	// Registered here (rather than left to the caller as `defer db.Close()`)
-	// so it participates in t.Cleanup's LIFO order: cleanups registered
-	// later (e.g. setupTestUser's user-delete) are guaranteed to run
-	// before this Close.
+	// Registered here, not via defer, so it runs after later cleanups
+	// like setupTestUser's user delete (t.Cleanup is LIFO).
 	t.Cleanup(func() { db.Close() })
 	return db
 }
@@ -123,5 +117,37 @@ func TestInvalidateUnknownTokenIsNotAnError(t *testing.T) {
 
 	if err := session.InvalidateSession(context.Background(), db, "token-that-does-not-exist"); err != nil {
 		t.Errorf("InvalidateSession on an unknown token should be a no-op, got %v", err)
+	}
+}
+
+// A real user might have the CLI open in two terminals at once, each
+// with its own session. Logging out of one should not touch the other.
+func TestMultipleSessionsPerUserIntegration(t *testing.T) {
+	db := openTestDB(t)
+
+	userID := setupTestUser(t, db, "sessiontest_multi")
+	ctx := context.Background()
+
+	sessA, err := session.CreateSession(ctx, db, userID, time.Minute)
+	if err != nil {
+		t.Fatalf("CreateSession (A): %v", err)
+	}
+	sessB, err := session.CreateSession(ctx, db, userID, time.Minute)
+	if err != nil {
+		t.Fatalf("CreateSession (B): %v", err)
+	}
+	if sessA.Token == sessB.Token {
+		t.Fatal("expected two separately created sessions to have different tokens")
+	}
+
+	if err := session.InvalidateSession(ctx, db, sessA.Token); err != nil {
+		t.Fatalf("InvalidateSession (A): %v", err)
+	}
+
+	if _, err := session.ValidateSession(ctx, db, sessA.Token); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("expected session A to be gone after invalidating it, got %v", err)
+	}
+	if _, err := session.ValidateSession(ctx, db, sessB.Token); err != nil {
+		t.Errorf("expected session B to still be valid, got %v", err)
 	}
 }

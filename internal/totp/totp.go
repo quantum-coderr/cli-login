@@ -1,15 +1,12 @@
 // Package totp wraps github.com/pquerna/otp/totp for generating and
-// verifying TOTP-based 2FA codes. It knows nothing about the DB or users
-// — internal/auth is what wires a secret to a user row and a code to a
-// login attempt.
+// verifying TOTP codes. It knows nothing about the DB or users.
 package totp
 
 import (
 	"fmt"
 
-	// Aliased because this package is also named "totp" — otherwise
-	// `totp.Generate(...)` inside a file that's itself `package totp`
-	// reads confusingly even though it's unambiguous to the compiler.
+	// Aliased since this package is also named totp, avoids confusing
+	// totp.Generate(...) inside package totp.
 	otplib "github.com/pquerna/otp/totp"
 )
 
@@ -17,10 +14,8 @@ import (
 // this system (e.g. Google Authenticator shows "CLILoginSystem (alice)").
 const Issuer = "CLILoginSystem"
 
-// GenerateSecret creates a new TOTP secret for username under issuer,
-// returning the raw base32 secret (to persist) and the otpauth:// URL
-// (for manual entry or QR-code generation — this package just returns
-// the string; Phase 4 decides how to display it).
+// GenerateSecret creates a new TOTP secret, returning the base32 secret
+// and an otpauth:// URL for the caller to display.
 func GenerateSecret(username, issuer string) (secret string, otpauthURL string, err error) {
 	key, err := otplib.Generate(otplib.GenerateOpts{
 		Issuer:      issuer,
@@ -32,11 +27,8 @@ func GenerateSecret(username, issuer string) (secret string, otpauthURL string, 
 	return key.Secret(), key.String(), nil
 }
 
-// VerifyCode checks a 6-digit code against secret. It uses the library's
-// default validation options (30s period, ±1 step skew, i.e. it accepts
-// the previous/current/next 30-second window) rather than an exact
-// match, so a code isn't rejected just because the client's clock or the
-// network round-trip cost it a few seconds.
+// VerifyCode checks code against secret, allowing the library's default
+// clock skew of one 30-second step either way.
 func VerifyCode(secret, code string) bool {
 	return otplib.Validate(code, secret)
 }

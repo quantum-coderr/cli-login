@@ -9,10 +9,8 @@ import (
 	"github.com/quantum-coderr/cli-login/internal/session"
 )
 
-// errorMessage maps known named errors from the auth/session/totp
-// packages to a user-facing string. Command handlers always print through
-// this rather than err.Error() directly, so a raw Go error (which can
-// wrap SQL/driver text via fmt.Errorf) never reaches the terminal.
+// errorMessage maps known auth/session errors to a user-facing string,
+// so a raw Go error never reaches the terminal.
 func errorMessage(err error) string {
 	if err == nil {
 		return ""
@@ -26,8 +24,12 @@ func errorMessage(err error) string {
 		return "That username is already taken."
 	case errors.Is(err, auth.ErrInvalidUsername):
 		return "Username cannot be empty."
+	case errors.Is(err, auth.ErrUsernameTooLong):
+		return fmt.Sprintf("Username must be at most %d characters.", auth.MaxUsernameLength)
 	case errors.Is(err, auth.ErrWeakPassword):
 		return fmt.Sprintf("Password must be at least %d characters.", auth.MinPasswordLength)
+	case errors.Is(err, auth.ErrPasswordTooLong):
+		return fmt.Sprintf("Password must be at most %d characters.", auth.MaxPasswordLength)
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		return "Invalid username or password."
 	case errors.Is(err, auth.ErrInvalidTOTPCode):
@@ -41,8 +43,7 @@ func errorMessage(err error) string {
 	case errors.Is(err, session.ErrSessionNotFound):
 		return "Session is no longer valid."
 	default:
-		// Anything not in the known list is an internal/infrastructure
-		// failure (DB errors, etc.) — still never leak the raw text.
+		// Unknown error, still never leak the raw text.
 		return "Something went wrong. Please try again."
 	}
 }

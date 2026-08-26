@@ -8,28 +8,24 @@ import (
 	"time"
 )
 
-// Config holds everything Phase 2's auth/session logic needs. It's meant
-// to be loaded once in main() and threaded through (or used to configure
-// package-level policy, e.g. auth.Configure) rather than re-read per call.
+// Config holds everything the auth and session logic needs, loaded once
+// at startup rather than re-read per call.
 type Config struct {
+	// DatabaseURL is the Postgres connection string.
 	DatabaseURL string
 
-	// MaxFailedAttempts is how many consecutive failed logins are allowed
-	// before an account is locked.
+	// MaxFailedAttempts is how many failed logins lock an account.
 	MaxFailedAttempts int
-	// LockoutDuration is how long an account stays locked after hitting
-	// MaxFailedAttempts.
+	// LockoutDuration is how long an account stays locked.
 	LockoutDuration time.Duration
-	// SessionTimeout is how long a session is valid for after creation.
+	// SessionTimeout is how long a session stays valid.
 	SessionTimeout time.Duration
 	// MinPasswordLength is the shortest password RegisterUser accepts.
 	MinPasswordLength int
 }
 
-// Load reads Config from the environment. Missing/empty vars fall back to
-// defaults rather than erroring — only DATABASE_URL has no sane default,
-// and callers are expected to check for that themselves (main.go already
-// does, via db.Connect failing on an empty DSN).
+// Load reads Config from the environment, falling back to defaults for
+// anything unset. DatabaseURL has no default, callers must check for it.
 func Load() Config {
 	return Config{
 		DatabaseURL:       os.Getenv("DATABASE_URL"),

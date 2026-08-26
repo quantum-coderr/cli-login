@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,9 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// ---------------------------------------------------------------------
-// Pure logic tests — no DB required, run with a plain `go test ./...`.
-// ---------------------------------------------------------------------
+// Pure logic tests, no DB required, run with a plain `go test ./...`.
 
 func TestHashAndVerifyPassword(t *testing.T) {
 	hash, err := hashPassword("correct-horse-battery-staple")
@@ -51,24 +50,21 @@ func TestHashPasswordSaltsEachCall(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Integration tests — require a real Postgres reachable via DATABASE_URL.
-// They're skipped automatically if DATABASE_URL isn't set.
-//
-// Run them against the Phase 1 docker-compose db (which publishes
-// 5432 to the host):
+// Integration tests need a real Postgres, reachable via DATABASE_URL,
+// and skip automatically if it's not set:
 //
 //	docker compose up -d db
 //	DATABASE_URL="postgres://cli_login_user:changeme@localhost:5432/cli_login?sslmode=disable" \
 //	  go test ./internal/auth/... -v
 //
-// Each test cleans up the rows it creates, so it's safe to re-run.
+// Each test cleans up after itself, so it's safe to re-run.
 // ---------------------------------------------------------------------
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		t.Skip("DATABASE_URL not set; skipping integration test (requires a running Postgres — see docker-compose)")
+		t.Skip("DATABASE_URL not set; skipping integration test (requires a running Postgres, see docker-compose)")
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -148,8 +144,7 @@ func TestLoginLockoutIntegration(t *testing.T) {
 		t.Fatalf("RegisterUser: %v", err)
 	}
 
-	// Use a low threshold/short lockout for the test rather than the
-	// package defaults, and restore them afterward.
+	// Lower threshold and shorter lockout than the defaults, restored after.
 	origMax, origLockout, origSession, origMinLen := MaxFailedAttempts, LockoutDuration, SessionDuration, MinPasswordLength
 	Configure(2, 200*time.Millisecond, origSession, origMinLen)
 	defer Configure(origMax, origLockout, origSession, origMinLen)
@@ -171,5 +166,104 @@ func TestLoginLockoutIntegration(t *testing.T) {
 	}
 	if !lockedErr.Until.After(time.Now()) {
 		t.Error("expected AccountLockedError.Until to be in the future")
+	}
+}
+
+// Once locked_until passes, a correct login should succeed and reset
+// failed_attempts to zero.
+func TestLoginLockoutExpiresIntegration(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	const username = "authtest_lockout_expiry"
+	const password = "correct-horse-battery-staple"
+	ctx := context.Background()
+
+	cleanupUser(t, db, username)
+	defer cleanupUser(t, db, username)
+
+	if _, err := RegisterUser(ctx, db, username, password); err != nil {
+		t.Fatalf("RegisterUser: %v", err)
+	}
+
+	origMax, origLockout, origSession, origMinLen := MaxFailedAttempts, LockoutDuration, SessionDuration, MinPasswordLength
+	Configure(2, 100*time.Millisecond, origSession, origMinLen)
+	defer Configure(origMax, origLockout, origSession, origMinLen)
+
+	for i := 0; i < 2; i++ {
+		if _, err := LoginUser(ctx, db, username, "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("attempt %d: expected ErrInvalidCredentials, got %v", i, err)
+		}
+	}
+
+	if _, err := LoginUser(ctx, db, username, password); !errors.Is(err, ErrAccountLocked) {
+		t.Fatalf("expected the account to be locked right after hitting the threshold, got %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	user, err := LoginUser(ctx, db, username, password)
+	if err != nil {
+		t.Fatalf("expected login to succeed once the lockout window passed, got %v", err)
+	}
+	if user.FailedAttempts != 0 {
+		t.Errorf("expected failed_attempts to reset to 0 after a successful login, got %d", user.FailedAttempts)
+	}
+	if user.LockedUntil.Valid {
+		t.Error("expected locked_until to be cleared after a successful login")
+	}
+}
+
+// " rohan" and "rohan" should be the same account, both at registration
+// time and when logging back in.
+func TestRegisterAndLoginTrimUsernameIntegration(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	const username = "authtest_trim_user"
+	const password = "correct-horse-battery-staple"
+	ctx := context.Background()
+
+	cleanupUser(t, db, username)
+	defer cleanupUser(t, db, username)
+
+	if _, err := RegisterUser(ctx, db, "  "+username+"  ", password); err != nil {
+		t.Fatalf("RegisterUser with padded username: %v", err)
+	}
+
+	// Should collide with the trimmed account, not create a second one.
+	if _, err := RegisterUser(ctx, db, username, password); !errors.Is(err, ErrUserExists) {
+		t.Errorf("expected ErrUserExists for the trimmed equivalent, got %v", err)
+	}
+
+	user, err := LoginUser(ctx, db, "  "+username+"  ", password)
+	if err != nil {
+		t.Fatalf("LoginUser with padded username: %v", err)
+	}
+	if user.Username != username {
+		t.Errorf("expected username %q, got %q", username, user.Username)
+	}
+}
+
+// A too-long username or password should fail with a specific error,
+// not reach the database or bcrypt.
+func TestRegisterUserRejectsOverLongInputIntegration(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	tooLongUsername := strings.Repeat("a", MaxUsernameLength+1)
+	if _, err := RegisterUser(ctx, db, tooLongUsername, "correct-horse-battery-staple"); !errors.Is(err, ErrUsernameTooLong) {
+		t.Errorf("expected ErrUsernameTooLong, got %v", err)
+	}
+
+	const username = "authtest_long_password"
+	cleanupUser(t, db, username)
+	defer cleanupUser(t, db, username)
+
+	tooLongPassword := strings.Repeat("a", MaxPasswordLength+1)
+	if _, err := RegisterUser(ctx, db, username, tooLongPassword); !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("expected ErrPasswordTooLong, got %v", err)
 	}
 }

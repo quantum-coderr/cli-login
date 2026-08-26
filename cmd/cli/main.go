@@ -1,6 +1,5 @@
-// Phase 4: connect to Postgres, run migrations, then hand off to the
-// interactive CLI (internal/cli). This is the real entry point now — the
-// Phase 2/3 TEMPORARY verification blocks are gone.
+// Entry point: connects to Postgres, runs migrations, then hands off to
+// the interactive prompt in internal/cli.
 package main
 
 import (
@@ -34,9 +33,7 @@ func main() {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
-	// Apply lockout/session policy from env (MAX_FAILED_ATTEMPTS /
-	// LOCKOUT_DURATION_MINUTES / SESSION_TIMEOUT_MINUTES) before serving
-	// any logins.
+	// Must happen before the CLI starts serving logins.
 	auth.Configure(cfg.MaxFailedAttempts, cfg.LockoutDuration, cfg.SessionTimeout, cfg.MinPasswordLength)
 
 	c, err := cli.NewCLI(conn)
@@ -45,16 +42,8 @@ func main() {
 	}
 	defer c.Close()
 
-	// Ctrl+C/Ctrl+D typed at the prompt are handled inside internal/cli.Run
-	// itself: readline puts the terminal in raw mode while reading, so the
-	// kernel never generates a SIGINT for Ctrl+C in the first place — it
-	// arrives as a plain byte that Readline() turns into ErrInterrupt, and
-	// Ctrl+D arrives as io.EOF. Both are handled there as a graceful exit
-	// (invalidating the session first if logged in). No OS-level signal
-	// handler is needed for that; installing one here would only catch
-	// signals delivered outside readline's raw-mode read (e.g. `docker
-	// stop`), which should keep the normal Go default of terminating the
-	// process rather than being caught and left unhandled.
+	// No signal handling here: internal/cli.Run already handles Ctrl+C
+	// and Ctrl+D itself via readline's raw mode.
 	if err := c.Run(context.Background()); err != nil {
 		log.Fatalf("cli exited with error: %v", err)
 	}

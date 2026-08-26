@@ -2,9 +2,8 @@ package session
 
 import "testing"
 
-// Pure logic test — no DB required. Kept in-package (unlike the
-// integration tests in session_integration_test.go) because it needs
-// access to the unexported generateToken/tokenBytes.
+// Kept in-package, unlike the integration tests, since it needs access
+// to the unexported generateToken/tokenBytes.
 func TestGenerateTokenIsRandomAndCorrectLength(t *testing.T) {
 	a, err := generateToken()
 	if err != nil {
