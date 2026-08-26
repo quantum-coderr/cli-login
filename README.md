@@ -7,10 +7,7 @@ apps like Google Authenticator, and session tokens with expiry. Everything
 runs behind an interactive terminal prompt built on readline, backed by
 Postgres.
 
-This was built as a learning project, working through the pieces of a real
-login system one at a time: the database and migrations first, then
-password auth, then 2FA, then the interactive CLI, then packaging it for
-Docker, and finally this pass of polish and tests.
+The system is built around a Postgres schema with two tables (users and sessions), a set of Go packages handling auth, sessions, and TOTP independently, and a thin CLI layer on top that wires those together into an interactive terminal.
 
 ## Prerequisites
 
