@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      # pg_isready only confirms the server is accepting connections, not
+      # that our specific db/user exist — but since POSTGRES_DB/USER are
+      # created by the official image on first boot before it starts
+      # accepting connections, a passing pg_isready here is a reliable
+      # signal that "app" can connect successfully.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  app:
+    build: .
+    depends_on:
+      db:
+        # Waits for the healthcheck above, not just container start — so
+        # the app's own retry logic (internal/db.Connect) is a second line
+        # of defense, not the only thing standing between it and a
+        # not-yet-ready Postgres.
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+
+volumes:
+  pgdata:

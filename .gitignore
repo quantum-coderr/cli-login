@@ -1,0 +1,23 @@
+# Binaries
+/bin/
+/cli-login-system
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build/test cache
+/vendor/
+
+# Environment
+.env
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
