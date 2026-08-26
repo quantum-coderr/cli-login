@@ -22,6 +22,8 @@ type Config struct {
 	LockoutDuration time.Duration
 	// SessionTimeout is how long a session is valid for after creation.
 	SessionTimeout time.Duration
+	// MinPasswordLength is the shortest password RegisterUser accepts.
+	MinPasswordLength int
 }
 
 // Load reads Config from the environment. Missing/empty vars fall back to
@@ -34,6 +36,7 @@ func Load() Config {
 		MaxFailedAttempts: getEnvInt("MAX_FAILED_ATTEMPTS", 5),
 		LockoutDuration:   time.Duration(getEnvInt("LOCKOUT_DURATION_MINUTES", 15)) * time.Minute,
 		SessionTimeout:    time.Duration(getEnvInt("SESSION_TIMEOUT_MINUTES", 30)) * time.Minute,
+		MinPasswordLength: getEnvInt("MIN_PASSWORD_LENGTH", 8),
 	}
 }
 

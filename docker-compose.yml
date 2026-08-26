@@ -1,3 +1,15 @@
+# Two services here: "db" is a plain Postgres instance, "app" is the
+# Go CLI binary itself. They talk to each other over the network compose
+# creates automatically for this project, and app finds db by the service
+# name "db" as the hostname, that is why DATABASE_URL in .env points at
+# db:5432 rather than localhost. app waits for db to report healthy
+# before it even starts, see the depends_on block below.
+#
+# This is meant to be run interactively (docker compose run --rm -it app,
+# see the README notes / chat history for the full command), since the
+# whole point of app is an interactive login prompt, not a background
+# service.
+
 services:
   db:
     image: postgres:16-alpine
@@ -6,32 +18,59 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
+      # Named volume, not a bind mount, so the data lives in Docker's own
+      # storage and survives "docker compose down" (without -v) and
+      # container recreation. See the persistence test sequence for how
+      # to prove this.
       - pgdata:/var/lib/postgresql/data
     ports:
+      # Published mainly so you can run `go test` or `psql` against the
+      # db straight from the host while developing, without needing to
+      # be inside a container. Not required for app to reach db, that
+      # happens over the internal compose network regardless.
       - "5432:5432"
     healthcheck:
       # pg_isready only confirms the server is accepting connections, not
-      # that our specific db/user exist — but since POSTGRES_DB/USER are
+      # that our specific db/user exist, but since POSTGRES_DB/USER are
       # created by the official image on first boot before it starts
       # accepting connections, a passing pg_isready here is a reliable
-      # signal that "app" can connect successfully.
+      # signal that app can connect successfully.
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      # A brand new volume means Postgres has to run initdb before it can
+      # even start listening, which takes longer than a normal restart
+      # against data that already exists. 10s gives that first-time case
+      # enough room without slowing down the common case, since
+      # start_period only delays when failures start counting against
+      # retries, it does not force every startup to wait that long.
+      start_period: 10s
 
   app:
     build: .
     depends_on:
       db:
-        # Waits for the healthcheck above, not just container start — so
-        # the app's own retry logic (internal/db.Connect) is a second line
-        # of defense, not the only thing standing between it and a
+        # Waits for the healthcheck above, not just container start, so
+        # the app's own retry logic (internal/db.Connect) is a second
+        # line of defense, not the only thing standing between it and a
         # not-yet-ready Postgres.
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      MAX_FAILED_ATTEMPTS: ${MAX_FAILED_ATTEMPTS}
+      LOCKOUT_DURATION_MINUTES: ${LOCKOUT_DURATION_MINUTES}
+      SESSION_TIMEOUT_MINUTES: ${SESSION_TIMEOUT_MINUTES}
+      MIN_PASSWORD_LENGTH: ${MIN_PASSWORD_LENGTH}
+    # Both of these are what make the interactive prompt actually work
+    # through Docker. stdin_open keeps stdin open even when nothing is
+    # attached yet (otherwise the CLI would see EOF immediately and quit
+    # before you ever get a prompt), and tty allocates a pseudo terminal
+    # so readline gets real terminal behavior, masked password input,
+    # tab completion, and so on, instead of falling back to plain line
+    # reading.
+    stdin_open: true
+    tty: true
 
 volumes:
   pgdata:

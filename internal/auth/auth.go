@@ -16,17 +16,13 @@ import (
 	"github.com/quantum-coderr/cli-login/internal/models"
 )
 
-// MinPasswordLength is the minimum password length RegisterUser accepts.
-// Deliberately simple — full password policy is out of scope for this size
-// of project.
-const MinPasswordLength = 8
-
-// Lockout/session policy. These have working defaults but are meant to be
-// set once at startup via Configure(), from internal/config (env vars
-// MAX_FAILED_ATTEMPTS / LOCKOUT_DURATION_MINUTES / SESSION_TIMEOUT_MINUTES).
-// They're package-level rather than parameters to LoginUser/CompleteLogin
-// because those signatures are fixed by the spec — this keeps them clean
-// while still making the policy configurable.
+// Auth policy. These have working defaults but are meant to be set once
+// at startup via Configure(), from internal/config (env vars
+// MAX_FAILED_ATTEMPTS / LOCKOUT_DURATION_MINUTES / SESSION_TIMEOUT_MINUTES /
+// MIN_PASSWORD_LENGTH). They're package-level rather than parameters to
+// LoginUser/CompleteLogin/RegisterUser because those signatures are fixed
+// by the spec — this keeps them clean while still making the policy
+// configurable.
 var (
 	MaxFailedAttempts = 5
 	LockoutDuration   = 15 * time.Minute
@@ -35,15 +31,20 @@ var (
 	// explicit duration — this is just what CompleteLogin passes it,
 	// since CompleteLogin's own signature has no duration parameter.
 	SessionDuration = 30 * time.Minute
+	// MinPasswordLength is the shortest password RegisterUser accepts.
+	// Deliberately simple — full password policy is out of scope for this
+	// size of project.
+	MinPasswordLength = 8
 )
 
-// Configure sets the package's lockout/session policy. Call once at
-// startup (main.go does, from internal/config) before serving any logins.
-// Not safe to call concurrently with in-flight LoginUser/CompleteLogin calls.
-func Configure(maxFailedAttempts int, lockoutDuration, sessionDuration time.Duration) {
+// Configure sets the package's auth policy. Call once at startup (main.go
+// does, from internal/config) before serving any logins. Not safe to call
+// concurrently with in-flight LoginUser/CompleteLogin/RegisterUser calls.
+func Configure(maxFailedAttempts int, lockoutDuration, sessionDuration time.Duration, minPasswordLength int) {
 	MaxFailedAttempts = maxFailedAttempts
 	LockoutDuration = lockoutDuration
 	SessionDuration = sessionDuration
+	MinPasswordLength = minPasswordLength
 }
 
 // RegisterUser creates a new user with a bcrypt-hashed password.
