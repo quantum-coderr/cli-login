@@ -21,23 +21,29 @@ import (
 // of project.
 const MinPasswordLength = 8
 
-// Lockout policy. These have working defaults but are meant to be set once
-// at startup via Configure(), from internal/config (env vars
-// MAX_FAILED_ATTEMPTS / LOCKOUT_DURATION_MINUTES). They're package-level
-// rather than parameters to LoginUser because the caller-facing signature
-// is fixed by the spec (ctx, db, username, password) — this keeps that
-// signature clean while still making the policy configurable.
+// Lockout/session policy. These have working defaults but are meant to be
+// set once at startup via Configure(), from internal/config (env vars
+// MAX_FAILED_ATTEMPTS / LOCKOUT_DURATION_MINUTES / SESSION_TIMEOUT_MINUTES).
+// They're package-level rather than parameters to LoginUser/CompleteLogin
+// because those signatures are fixed by the spec — this keeps them clean
+// while still making the policy configurable.
 var (
 	MaxFailedAttempts = 5
 	LockoutDuration   = 15 * time.Minute
+	// SessionDuration is how long a session issued by CompleteLogin
+	// (Phase 3) stays valid. session.CreateSession itself still takes an
+	// explicit duration — this is just what CompleteLogin passes it,
+	// since CompleteLogin's own signature has no duration parameter.
+	SessionDuration = 30 * time.Minute
 )
 
-// Configure sets the package's lockout policy. Call once at startup
-// (main.go does, from internal/config) before serving any logins. Not
-// safe to call concurrently with in-flight LoginUser calls.
-func Configure(maxFailedAttempts int, lockoutDuration time.Duration) {
+// Configure sets the package's lockout/session policy. Call once at
+// startup (main.go does, from internal/config) before serving any logins.
+// Not safe to call concurrently with in-flight LoginUser/CompleteLogin calls.
+func Configure(maxFailedAttempts int, lockoutDuration, sessionDuration time.Duration) {
 	MaxFailedAttempts = maxFailedAttempts
 	LockoutDuration = lockoutDuration
+	SessionDuration = sessionDuration
 }
 
 // RegisterUser creates a new user with a bcrypt-hashed password.

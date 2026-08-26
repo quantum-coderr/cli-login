@@ -18,6 +18,12 @@ var (
 	// actual error returned by LoginUser is *AccountLockedError, which
 	// carries the unlock time and satisfies errors.Is(err, ErrAccountLocked).
 	ErrAccountLocked = errors.New("auth: account is locked")
+
+	// TOTP / 2FA (Phase 3).
+	ErrTOTPRequired       = errors.New("auth: TOTP code required")
+	ErrInvalidTOTPCode    = errors.New("auth: invalid TOTP code")
+	ErrTOTPAlreadyEnabled = errors.New("auth: TOTP is already enabled")
+	ErrTOTPNotEnabled     = errors.New("auth: TOTP is not enabled")
 )
 
 // AccountLockedError reports that an account is locked, and until when.

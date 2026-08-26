@@ -150,9 +150,9 @@ func TestLoginLockoutIntegration(t *testing.T) {
 
 	// Use a low threshold/short lockout for the test rather than the
 	// package defaults, and restore them afterward.
-	origMax, origLockout := MaxFailedAttempts, LockoutDuration
-	Configure(2, 200*time.Millisecond)
-	defer Configure(origMax, origLockout)
+	origMax, origLockout, origSession := MaxFailedAttempts, LockoutDuration, SessionDuration
+	Configure(2, 200*time.Millisecond, origSession)
+	defer Configure(origMax, origLockout, origSession)
 
 	for i := 0; i < 2; i++ {
 		if _, err := LoginUser(ctx, db, username, "wrong-password"); !errors.Is(err, ErrInvalidCredentials) {
