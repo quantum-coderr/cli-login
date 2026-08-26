@@ -1,7 +1,5 @@
-// Package auth implements core authentication logic: registration,
-// credential verification, and failed-attempt lockout. It has no
-// knowledge of TOTP (Phase 3) or the CLI/prompt layer (Phase 4) — it's
-// meant to be a plain library other layers call into.
+// Package auth implements registration, login, and account lockout. It
+// has no knowledge of TOTP or the CLI layer.
 package auth
 
 import (
@@ -9,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -16,42 +15,54 @@ import (
 	"github.com/quantum-coderr/cli-login/internal/models"
 )
 
-// MinPasswordLength is the minimum password length RegisterUser accepts.
-// Deliberately simple — full password policy is out of scope for this size
-// of project.
-const MinPasswordLength = 8
+// MaxUsernameLength and MaxPasswordLength cap input size before it ever
+// reaches the database. MaxPasswordLength matches bcrypt's own 72 byte
+// limit, so a too-long password fails here with a clear error instead of
+// inside bcrypt.
+const (
+	MaxUsernameLength = 64
+	MaxPasswordLength = 72
+)
 
-// Lockout policy. These have working defaults but are meant to be set once
-// at startup via Configure(), from internal/config (env vars
-// MAX_FAILED_ATTEMPTS / LOCKOUT_DURATION_MINUTES). They're package-level
-// rather than parameters to LoginUser because the caller-facing signature
-// is fixed by the spec (ctx, db, username, password) — this keeps that
-// signature clean while still making the policy configurable.
+// Auth policy, set once at startup via Configure(). Package-level rather
+// than parameters since LoginUser/CompleteLogin/RegisterUser signatures
+// are fixed.
 var (
 	MaxFailedAttempts = 5
 	LockoutDuration   = 15 * time.Minute
+	// SessionDuration is what CompleteLogin passes to session.CreateSession.
+	SessionDuration = 30 * time.Minute
+	// MinPasswordLength is the shortest password RegisterUser accepts.
+	MinPasswordLength = 8
 )
 
-// Configure sets the package's lockout policy. Call once at startup
-// (main.go does, from internal/config) before serving any logins. Not
-// safe to call concurrently with in-flight LoginUser calls.
-func Configure(maxFailedAttempts int, lockoutDuration time.Duration) {
+// Configure sets the package's auth policy. Call once at startup, not
+// safe to call while logins are in flight.
+func Configure(maxFailedAttempts int, lockoutDuration, sessionDuration time.Duration, minPasswordLength int) {
 	MaxFailedAttempts = maxFailedAttempts
 	LockoutDuration = lockoutDuration
+	SessionDuration = sessionDuration
+	MinPasswordLength = minPasswordLength
 }
 
-// RegisterUser creates a new user with a bcrypt-hashed password.
-//
-// The returned User has PasswordHash cleared: nothing past this point in
-// Phase 2 needs it on the returned struct (LoginUser re-fetches its own
-// row to compare hashes), so it's zeroed here rather than left for a
-// future CLI layer to accidentally log or print.
+// RegisterUser creates a new user with a bcrypt-hashed password. The
+// returned User has PasswordHash cleared.
 func RegisterUser(ctx context.Context, db *sql.DB, username, password string) (*models.User, error) {
+	// Trim so " rohan" and "rohan" aren't treated as different accounts.
+	// Password is left alone, whitespace there may be intentional.
+	username = strings.TrimSpace(username)
+
 	if username == "" {
 		return nil, ErrInvalidUsername
 	}
+	if len(username) > MaxUsernameLength {
+		return nil, ErrUsernameTooLong
+	}
 	if len(password) < MinPasswordLength {
 		return nil, ErrWeakPassword
+	}
+	if len(password) > MaxPasswordLength {
+		return nil, ErrPasswordTooLong
 	}
 
 	var exists bool
@@ -88,11 +99,10 @@ func RegisterUser(ctx context.Context, db *sql.DB, username, password string) (*
 }
 
 // LoginUser verifies a username/password pair and applies lockout policy.
-// It does NOT create a session — see the note below.
-//
-// Returned User has PasswordHash cleared, for the same reason as in
-// RegisterUser.
+// It does not create a session, see CompleteLogin.
 func LoginUser(ctx context.Context, db *sql.DB, username, password string) (*models.User, error) {
+	username = strings.TrimSpace(username) // same trimming as RegisterUser
+
 	var user models.User
 	err := db.QueryRowContext(ctx, `
 		SELECT id, username, password_hash, totp_secret, totp_enabled,
@@ -103,8 +113,7 @@ func LoginUser(ctx context.Context, db *sql.DB, username, password string) (*mod
 		&user.FailedAttempts, &user.LockedUntil, &user.CreatedAt, &user.LastLoginAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Same error as a wrong password below — an unknown username must
-		// not be distinguishable from a wrong password.
+		// Same error as a wrong password, don't reveal whether the username exists.
 		return nil, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -134,20 +143,14 @@ func LoginUser(ctx context.Context, db *sql.DB, username, password string) (*mod
 	user.LockedUntil = sql.NullTime{}
 	user.LastLoginAt = sql.NullTime{Time: now, Valid: true}
 
-	// Deliberately no session.CreateSession call here. Phase 3 will wrap
-	// LoginUser with a TOTP challenge (checked via user.TOTPEnabled /
-	// user.TOTPSecret), and a session should only be issued once that
-	// second factor also passes. Keeping issuance out of LoginUser means
-	// Phase 3 can insert its check between "password ok" and "session
-	// created" without changing this function's signature or behavior.
+	// No session created here on purpose: CompleteLogin still needs to
+	// check TOTP before a session should exist.
 	return &user, nil
 }
 
-// recordFailedAttempt increments failed_attempts for a user and, if the
-// new count reaches MaxFailedAttempts, locks the account for
-// LockoutDuration. previousCount is the failed_attempts value already
-// read by the caller, so this issues one UPDATE rather than a
-// read-then-write round trip.
+// recordFailedAttempt increments failed_attempts and locks the account
+// if the new count reaches MaxFailedAttempts. previousCount is the
+// caller's already-read count, to avoid a read-then-write round trip.
 func recordFailedAttempt(ctx context.Context, db *sql.DB, userID string, previousCount int) error {
 	newCount := previousCount + 1
 
@@ -167,9 +170,7 @@ func recordFailedAttempt(ctx context.Context, db *sql.DB, userID string, previou
 	return err
 }
 
-// hashPassword and verifyPassword wrap bcrypt so the hashing/comparison
-// logic is a small, independently testable unit (see auth_test.go) rather
-// than inlined in RegisterUser/LoginUser.
+// hashPassword and verifyPassword wrap bcrypt as small, testable units.
 func hashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {

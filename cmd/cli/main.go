@@ -1,16 +1,14 @@
-// Phase 2: connect to Postgres, run migrations, then exercise core auth
-// logic (see the TEMPORARY block below). No interactive CLI yet — that's
-// Phase 4.
+// Entry point: connects to Postgres, runs migrations, then hands off to
+// the interactive prompt in internal/cli.
 package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"log"
 	"os"
 
 	"github.com/quantum-coderr/cli-login/internal/auth"
+	"github.com/quantum-coderr/cli-login/internal/cli"
 	"github.com/quantum-coderr/cli-login/internal/config"
 	"github.com/quantum-coderr/cli-login/internal/db"
 )
@@ -31,53 +29,22 @@ func main() {
 	if migrationsDir == "" {
 		migrationsDir = "migrations"
 	}
-
 	if err := db.RunMigrations(conn, migrationsDir); err != nil {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
-	log.Println("Connected and migrated successfully")
+	// Must happen before the CLI starts serving logins.
+	auth.Configure(cfg.MaxFailedAttempts, cfg.LockoutDuration, cfg.SessionTimeout, cfg.MinPasswordLength)
 
-	// Apply lockout policy from env (MAX_FAILED_ATTEMPTS /
-	// LOCKOUT_DURATION_MINUTES) before any login is attempted.
-	auth.Configure(cfg.MaxFailedAttempts, cfg.LockoutDuration)
-
-	// -----------------------------------------------------------------
-	// TEMPORARY - remove in Phase 4.
-	//
-	// Phase 4 replaces this whole block with the real interactive CLI.
-	// This just exercises RegisterUser/LoginUser end-to-end against the
-	// real DB so Phase 2 can be verified without a CLI: register a test
-	// user (or note it already exists on a re-run), log in with the
-	// correct password, then show a wrong-password attempt correctly
-	// failing.
-	// -----------------------------------------------------------------
-	ctx := context.Background()
-	const testUsername = "phase2_test_user"
-	const testPassword = "correct-horse-battery-staple"
-
-	user, err := auth.RegisterUser(ctx, conn, testUsername, testPassword)
-	switch {
-	case err == nil:
-		fmt.Printf("[TEMP] registered user %q (id=%s)\n", user.Username, user.ID)
-	case errors.Is(err, auth.ErrUserExists):
-		fmt.Printf("[TEMP] user %q already exists, skipping registration\n", testUsername)
-	default:
-		log.Fatalf("[TEMP] RegisterUser failed: %v", err)
-	}
-
-	loggedIn, err := auth.LoginUser(ctx, conn, testUsername, testPassword)
+	c, err := cli.NewCLI(conn)
 	if err != nil {
-		log.Fatalf("[TEMP] LoginUser (correct password) failed: %v", err)
+		log.Fatalf("failed to start CLI: %v", err)
 	}
-	fmt.Printf("[TEMP] login succeeded for %q (last_login_at=%s)\n", loggedIn.Username, loggedIn.LastLoginAt.Time)
+	defer c.Close()
 
-	if _, err := auth.LoginUser(ctx, conn, testUsername, "wrong-password"); err != nil {
-		fmt.Printf("[TEMP] login with wrong password correctly failed: %v\n", err)
-	} else {
-		log.Fatal("[TEMP] login with wrong password unexpectedly succeeded")
+	// No signal handling here: internal/cli.Run already handles Ctrl+C
+	// and Ctrl+D itself via readline's raw mode.
+	if err := c.Run(context.Background()); err != nil {
+		log.Fatalf("cli exited with error: %v", err)
 	}
-	// -----------------------------------------------------------------
-	// END TEMPORARY
-	// -----------------------------------------------------------------
 }

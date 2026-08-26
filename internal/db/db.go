@@ -1,6 +1,4 @@
 // Package db handles the Postgres connection and running SQL migrations.
-// It has no knowledge of users/sessions/auth — it just gets the schema
-// in place so later phases can build on it.
 package db
 
 import (
@@ -12,22 +10,13 @@ import (
 	"strings"
 	"time"
 
-	// Registers the "pgx" driver with database/sql. We use pgx/stdlib
-	// (rather than pgx's native pgx.Conn/pgxpool API) specifically so the
-	// rest of the app can stay on the standard database/sql interface.
+	// Registers the pgx driver so the rest of the app can use plain database/sql.
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// Connect opens a connection pool to Postgres using dsn (a standard
-// "postgres://user:pass@host:port/dbname?..." URL) and verifies it's
-// actually reachable before returning.
-//
-// Why retry: in docker-compose, the "db" container can report itself as
-// up before Postgres is actually accepting connections (or, healthcheck
-// aside, the app container may simply race the db container on cold
-// start). Rather than crash-looping the whole app container on the first
-// failed attempt, we retry a handful of times with a short backoff between
-// each, giving Postgres time to finish starting.
+// Connect opens a connection to Postgres and retries a few times if it
+// is not ready yet, since the db container can report healthy before
+// Postgres actually accepts connections.
 func Connect(dsn string) (*sql.DB, error) {
 	const (
 		maxAttempts = 5
@@ -36,8 +25,7 @@ func Connect(dsn string) (*sql.DB, error) {
 
 	conn, err := sql.Open("pgx", dsn)
 	if err != nil {
-		// sql.Open only validates the DSN and sets up the pool struct; it
-		// doesn't dial anything, so an error here means a malformed DSN.
+		// sql.Open only validates the DSN, it doesn't dial anything.
 		return nil, fmt.Errorf("db: open: %w", err)
 	}
 
@@ -61,10 +49,9 @@ func Connect(dsn string) (*sql.DB, error) {
 	return nil, fmt.Errorf("db: could not reach database after %d attempts: %w", maxAttempts, pingErr)
 }
 
-// RunMigrations applies every "*.up.sql" file in dir, in filename order,
-// tracking what's already been applied in a schema_migrations table so
-// it's safe to call on every process start (e.g. every container restart)
-// — already-applied migrations are simply skipped, not re-run.
+// RunMigrations applies any unapplied "*.up.sql" files in dir, tracking
+// progress in a schema_migrations table so it's safe to call on every
+// startup.
 func RunMigrations(conn *sql.DB, dir string) error {
 	if _, err := conn.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -87,8 +74,7 @@ func RunMigrations(conn *sql.DB, dir string) error {
 		}
 		files = append(files, e.Name())
 	}
-	// Filenames are zero-padded (0001_, 0002_, ...) so a plain lexical
-	// sort is also correct numeric order.
+	// Zero-padded filenames sort correctly as plain strings.
 	sort.Strings(files)
 
 	for _, filename := range files {
@@ -109,9 +95,7 @@ func RunMigrations(conn *sql.DB, dir string) error {
 			return fmt.Errorf("db: read migration %q: %w", filename, err)
 		}
 
-		// Run the migration and the bookkeeping insert in one transaction
-		// so a failing migration can never be left half-applied but
-		// recorded as done (or vice versa).
+		// One transaction so a failed migration is never left half-applied.
 		tx, err := conn.Begin()
 		if err != nil {
 			return fmt.Errorf("db: begin tx for %q: %w", version, err)

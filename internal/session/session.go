@@ -14,14 +14,12 @@ import (
 	"github.com/quantum-coderr/cli-login/internal/models"
 )
 
-// ErrSessionNotFound covers both "no such token" and "token exists but
-// expired" — deliberately not distinguished, so callers can't use timing
-// or error content to probe for valid-but-expired tokens.
+// ErrSessionNotFound covers both a missing and an expired token, kept
+// indistinguishable so callers can't probe which is which.
 var ErrSessionNotFound = errors.New("session: not found or expired")
 
-// tokenBytes is how much randomness goes into each session token: 32
-// bytes (256 bits), hex-encoded to a 64-character string. That's well
-// beyond brute-force range.
+// tokenBytes is 32 bytes (256 bits) of randomness per token, well beyond
+// brute-force range.
 const tokenBytes = 32
 
 // CreateSession issues a new session for userID, valid for duration from
@@ -71,8 +69,8 @@ func ValidateSession(ctx context.Context, db *sql.DB, token string) (*models.Ses
 	return &s, nil
 }
 
-// InvalidateSession deletes a session row (logout). Deleting a token that
-// doesn't exist is not an error — logging out is idempotent.
+// InvalidateSession deletes a session row. Deleting a missing token is
+// not an error, logout is idempotent.
 func InvalidateSession(ctx context.Context, db *sql.DB, token string) error {
 	if _, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE token = $1`, token); err != nil {
 		return fmt.Errorf("session: delete: %w", err)
@@ -80,10 +78,8 @@ func InvalidateSession(ctx context.Context, db *sql.DB, token string) error {
 	return nil
 }
 
-// generateToken produces a random session token using crypto/rand.
-// math/rand must never be used here — it's not cryptographically secure
-// and its output is predictable given enough samples, which would make
-// session tokens guessable.
+// generateToken uses crypto/rand, never math/rand, which is predictable
+// and would make tokens guessable.
 func generateToken() (string, error) {
 	buf := make([]byte, tokenBytes)
 	if _, err := rand.Read(buf); err != nil {

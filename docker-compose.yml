@@ -1,3 +1,6 @@
+# "db" is Postgres, "app" is the CLI. app finds db by the service name
+# "db" over the compose network. Run with: docker compose run --rm -it app
+
 services:
   db:
     image: postgres:16-alpine
@@ -10,28 +13,26 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      # pg_isready only confirms the server is accepting connections, not
-      # that our specific db/user exist — but since POSTGRES_DB/USER are
-      # created by the official image on first boot before it starts
-      # accepting connections, a passing pg_isready here is a reliable
-      # signal that "app" can connect successfully.
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 10s
 
   app:
     build: .
     depends_on:
       db:
-        # Waits for the healthcheck above, not just container start — so
-        # the app's own retry logic (internal/db.Connect) is a second line
-        # of defense, not the only thing standing between it and a
-        # not-yet-ready Postgres.
         condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      MAX_FAILED_ATTEMPTS: ${MAX_FAILED_ATTEMPTS}
+      LOCKOUT_DURATION_MINUTES: ${LOCKOUT_DURATION_MINUTES}
+      SESSION_TIMEOUT_MINUTES: ${SESSION_TIMEOUT_MINUTES}
+      MIN_PASSWORD_LENGTH: ${MIN_PASSWORD_LENGTH}
+    # Needed for the interactive prompt to work through Docker.
+    stdin_open: true
+    tty: true
 
 volumes:
   pgdata:
